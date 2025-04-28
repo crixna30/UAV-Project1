@@ -367,3 +367,86 @@ disp('Discussion for Lateral Position Loop (G_phi_py - Hover):');
 [poles_py, zeros_py] = zpkdata(TF_phi_py_hover, 'v');
 fprintf('  Open Loop Poles: %s\n', mat2str(round(poles_py, 4)));
 fprintf('  Open Loop Zeros: %s\n', mat2str(round(zeros_py, 4)));
+
+
+
+
+
+
+%% system iddentification (use this code separately as it takes lots of time to run)
+% Load data (already done)
+csvfilename = '2024-04-04_log07.csv';
+array = dlmread(csvfilename,',',1,0);
+time = array(:,1)'*1e-3;
+pos = array(:,2:4)';
+vel = array(:,5:7)';
+lbd = array(:,8:10)'*pi/180;
+om = array(:,11:13)'*pi/180;
+pos_ref = array(:,14:16)';
+yaw_ref = array(:,17)';
+motors = array(:,18:21)';
+
+% Preprocessing
+t = time - time(1);
+uint16_max = 2^16;
+u = motors/uint16_max;
+
+% Resample signals to uniform grid
+Ts = mean(diff(t));    % average sampling time
+t_uniform = t(1):Ts:t(end);  % new uniform time base
+
+
+
+u_theta = interp1(t, lbd(2,:)', t_uniform, 'linear');
+y_px    = interp1(t, pos(1,:)', t_uniform, 'linear');
+u_phi   = interp1(t, lbd(1,:)', t_uniform, 'linear');
+y_py    = interp1(t, pos(2,:)', t_uniform, 'linear');
+T_sum   = sum(u,1); 
+u_T     = interp1(t, T_sum', t_uniform, 'linear');
+y_pz    = interp1(t, pos(3,:)', t_uniform, 'linear');
+
+t = t_uniform;   % update t
+
+% Make sure all signals are column vectors
+u_theta = u_theta(:);
+y_px = y_px(:);
+u_phi = u_phi(:);
+y_py = y_py(:);
+u_T = u_T(:);
+y_pz = y_pz(:);
+
+
+% Create iddata
+data_px = iddata(y_px, u_theta, Ts);
+data_py = iddata(y_py, u_phi, Ts);
+data_pz = iddata(y_pz, u_T, Ts);
+
+% Estimate transfer functions
+np = 2; % number of poles
+nz = 1; % number of zeros
+sys_theta_px = tfest(data_px, np, nz);
+sys_phi_py = tfest(data_py, np, nz);
+sys_T_pz = tfest(data_pz, np, nz);
+
+% Simulate and compare
+[y_theta_px] = lsim(sys_theta_px, u_theta, t);
+[y_phi_py] = lsim(sys_phi_py, u_phi, t);
+[y_T_pz] = lsim(sys_T_pz, u_T, t);
+
+% Plot
+figure;
+subplot(3,1,1);
+plot(t, y_px, 'b', t, y_theta_px, 'r--');
+title('p_x: measured vs model');
+legend('measured','model');
+
+subplot(3,1,2);
+plot(t, y_py, 'b', t, y_phi_py, 'r--');
+title('p_y: measured vs model');
+legend('measured','model');
+
+subplot(3,1,3);
+plot(t, y_pz, 'b', t, y_T_pz, 'r--');
+title('p_z: measured vs model');
+legend('measured','model');
+
