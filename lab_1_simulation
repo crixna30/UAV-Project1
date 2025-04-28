@@ -1,0 +1,369 @@
+clear; clc; close all;
+
+%% === Constants ===
+% Physical properties of the Crazyflie 2.x (adjust if necessary)
+m = 0.027;             % Mass [kg]
+g = 9.81;              % Gravity acceleration [m/s^2]
+r = 0.046;             % Arm length (center to motor) [m]
+J = diag([1.4e-5, 1.4e-5, 2.17e-5]); % Inertia matrix [kg*m^2] (assuming diagonal)
+
+% Aerodynamic Coefficients (These are CRUCIAL and often estimates)
+% Drag coefficients (Linear velocity drag in body frame)
+% D = diag([1e-3, 1e-3, 2e-3]); % Original Example values
+D = diag([5e-3, 5e-3, 1e-2]); % Using 5x larger values - EXPERIMENT with these!
+disp('Using Drag Coefficients D = '); disp(D); % Show chosen D matrix
+
+% Rotor coefficients 
+c_T = 8.004e-6;        % Thrust coefficient
+c_Q = 1.5e-9;          % Drag (moment) coefficient
+
+% --- Define Constant Input 'u' Directly for Task 1.5 Simulation ---
+% Input vector: u = [Total Thrust; Moment_x; Moment_y; Moment_z]
+tp_const_direct = 2 * m * g; % Apply thrust equal to twice the weight
+np_const_direct = [5; 0; 0]; % moments roll, pitch and yaw
+
+
+%% === Task 1.5: Nonlinear Simulation from Rest (with Direct Input) ===
+% Simulate the drone starting from rest with a constant, directly specified
+% total thrust (2*m*g) and zero moments.
+
+disp('--- Task 1.5: Nonlinear Simulation (Using Direct Input) ---');
+
+% Simulation setup
+Dt = 0.01;             % Time step [s]
+Tfinal =10 ;            % Simulation duration [s]
+t = 0:Dt:Tfinal;       % Time vector
+Nsim = length(t);
+
+% State vector initialization:
+% x = [px, py, pz, u, v, w, phi, theta, psi, p, q, r]'
+% p = world position [m], v = body velocity [m/s],
+% eul = ZYX Euler angles [rad], omega = body angular rates [rad/s]
+x_sim = zeros(12, Nsim); % Use x_sim to avoid confusion with equilibrium state x_eq
+x0 = zeros(12,1);      % Initial state at rest
+x_sim(:,1) = x0;
+
+
+
+u_sim_const = [tp_const_direct; np_const_direct]; % Constant input for this simulation
+
+disp('Constant input u = [T; Mx; My; Mz] used for simulation:');
+disp(u_sim_const'); % Display as row
+
+% --- Simulation loop ---
+for k = 1:Nsim-1
+    % Calculate state derivative using the dynamics function
+    dx = dynamics(x_sim(:,k), u_sim_const, m, g, J, D);
+    % Integrate using Euler forward method
+    x_sim(:,k+1) = x_sim(:,k) + Dt * dx;
+
+    % Optional: Add state saturation/limits if needed (e.g., angles wrap around)
+    % x_sim(9, k+1) = wrapToPi(x_sim(9, k+1)); % Example for yaw
+end
+
+% --- Plotting Simulation Results ---
+figure('Name', 'Task 1.5: Nonlinear Simulation Results (Direct Input)');
+
+% 3D Position
+subplot(2,2,1);
+plot3(x_sim(1,:), x_sim(2,:), x_sim(3,:), 'LineWidth', 1.5);
+xlabel('x [m]'); ylabel('y [m]'); zlabel('z [m]');
+title('Position (World Frame)'); grid on; axis equal;
+
+% Euler Angles
+subplot(2,2,2);
+plot(t, rad2deg(x_sim(7,:)), 'r', 'DisplayName', '\phi (roll)', 'LineWidth', 1.5); hold on;
+plot(t, rad2deg(x_sim(8,:)), 'g', 'DisplayName', '\theta (pitch)', 'LineWidth', 1.5);
+plot(t, rad2deg(x_sim(9,:)), 'b', 'DisplayName', '\psi (yaw)', 'LineWidth', 1.5);
+xlabel('Time [s]'); ylabel('Euler Angles [deg]');
+legend; grid on; title('Euler Angles'); hold off;
+
+% Linear Velocity (Body Frame)
+subplot(2,2,3);
+plot(t, x_sim(4,:), 'r', 'DisplayName', 'u (forward)', 'LineWidth', 1.5); hold on;
+plot(t, x_sim(5,:), 'g', 'DisplayName', 'v (side)', 'LineWidth', 1.5);
+plot(t, x_sim(6,:), 'b', 'DisplayName', 'w (upward)', 'LineWidth', 1.5);
+xlabel('Time [s]'); ylabel('Body Velocity [m/s]');
+legend; grid on; title('Linear Velocity (Body Frame)'); hold off;
+
+% Angular Velocity (Body Frame)
+subplot(2,2,4);
+plot(t, rad2deg(x_sim(10,:)), 'r', 'DisplayName', 'p (roll rate)', 'LineWidth', 1.5); hold on;
+plot(t, rad2deg(x_sim(11,:)), 'g', 'DisplayName', 'q (pitch rate)', 'LineWidth', 1.5);
+plot(t, rad2deg(x_sim(12,:)), 'b', 'DisplayName', 'r (yaw rate)', 'LineWidth', 1.5);
+xlabel('Time [s]'); ylabel('Body Rates [deg/s]');
+legend; grid on; title('Angular Velocity (Body Frame)'); hold off;
+
+sgtitle('Task 1.5 Simulation: Start from Rest, Input = [2mg; 0; 0; 0]');
+
+%% === Task 1.6: Equilibrium Conditions ===
+% Calculate equilibrium states and inputs for Hover and Horizontal Flight.
+% Note: These calculations use the physical model parameters (m, g, D),
+% NOT the arbitrary input used in the Task 1.5 simulation above.
+
+disp('--- Task 1.6: Equilibrium Conditions ---');
+
+% Define Target Horizontal Flight Speed (World X-direction)
+Vx_target = 1.0; % [m/s] Example speed for linearization analysis
+
+% Calculate equilibrium points using the dedicated function
+[xe_hover, ue_hover, xe_flight, ue_flight] = equilibrium_crazyflie(Vx_target, m, g, D);
+
+disp('Equilibrium State (Hover): xe_hover');
+disp(xe_hover'); % Display state as row vector
+disp('Equilibrium Input (Hover): ue_hover');
+disp(ue_hover'); % Should be [m*g; 0; 0; 0]
+
+disp(['Equilibrium State (Horizontal Flight @ Vx = ', num2str(Vx_target), ' m/s): xe_flight']);
+disp(xe_flight');
+disp(['Equilibrium Input (Horizontal Flight @ Vx = ', num2str(Vx_target), ' m/s): ue_flight']);
+disp(ue_flight');
+
+
+%% === Task 1.7: Linearized Models ===
+% Obtain the linearized state-space models (A, B matrices) around the
+% calculated equilibrium points.
+
+disp('--- Task 1.7: Linearized Models ---');
+
+% Linearize around Hover Equilibrium
+[A_hover, B_hover] = linearize_crazyflie(xe_hover, ue_hover, m, g, J, D);
+disp('Linearized Model around Hover:');
+fprintf('  A_hover size: %d x %d\n', size(A_hover,1), size(A_hover,2));
+fprintf('  B_hover size: %d x %d\n', size(B_hover,1), size(B_hover,2));
+
+% Linearize around Horizontal Flight Equilibrium
+[A_flight, B_flight] = linearize_crazyflie(xe_flight, ue_flight, m, g, J, D);
+disp(['Linearized Model around Horizontal Flight (Vx = ', num2str(Vx_target), ' m/s):']);
+fprintf('  A_flight size: %d x %d\n', size(A_flight,1), size(A_flight,2));
+fprintf('  B_flight size: %d x %d\n', size(B_flight,1), size(B_flight,2));
+
+
+% Add this temporarily after calculating A_hover, B_hover in Task 1.7
+disp('--- Debugging A_hover ---');
+disp('Velocity Damping Block A(4:6, 4:6):');
+disp(A_hover(4:6, 4:6)); % EXPECTED TO BE NEAR ZERO
+
+disp('Angle to Velocity Coupling Block A(4:6, 7:9):');
+disp(A_hover(4:6, 7:9)); % EXPECTED TO HAVE g terms (A(5,7)=g, A(4,8)=-g)
+
+disp('Rate to Angle Coupling Block A(7:9, 10:12):');
+disp(A_hover(7:9, 10:12)); % EXPECTED TO BE NEAR eye(3)
+disp('--- End Debugging A_hover ---');
+
+%% === Task 1.8: Eigenvalue Analysis and Plotting ===
+% Compute and plot eigenvalues of the linearized models for different flight speeds.
+
+disp('--- Task 1.8: Eigenvalue Analysis ---');
+
+% Define list of equilibrium velocities (World X-direction speed) for analysis
+Vx_list = [0, 0.5, 1.0, 2.0]; % [m/s] (0 = Hover)
+num_velocities = length(Vx_list);
+
+eigenvalue_data = cell(num_velocities, 1); % To store eigenvalues for each Vx
+legend_entries = cell(num_velocities, 1);  % For plot legend
+
+figure('Name', 'Task 1.8: Eigenvalues vs Flight Speed');
+hold on;
+colors = lines(num_velocities); % Distinct colors for plotting
+markers = {'x', '+', 'o', '*', 's', 'd', '^'}; % Markers
+
+fprintf('Calculating and plotting eigenvalues for Vx = ');
+for i = 1:num_velocities
+    Vx_current = Vx_list(i);
+    fprintf('%.2f m/s... ', Vx_current);
+
+    % 1. Calculate Equilibrium for this Vx
+    [~, ~, xe_current, ue_current] = equilibrium_crazyflie(Vx_current, m, g, D);
+
+    % 2. Linearize around this equilibrium
+    [A_current, ~] = linearize_crazyflie(xe_current, ue_current, m, g, J, D);
+
+    % 3. Compute & Store Eigenvalues
+    eigs_current = eig(A_current);
+    eigenvalue_data{i} = eigs_current;
+
+    % 4. Plot eigenvalues on the complex plane
+    current_marker = markers{mod(i-1, length(markers)) + 1};
+    plot(real(eigs_current), imag(eigs_current), ...
+         'Marker', current_marker, 'Color', colors(i,:), ...
+         'LineStyle', 'none', 'MarkerSize', 8, 'LineWidth', 1.5);
+
+    legend_entries{i} = sprintf('Vx = %.1f m/s', Vx_current);
+end
+fprintf('\nDone.\n');
+
+% Enhance the eigenvalue plot
+grid on; xlabel('Real Part (\sigma)'); ylabel('Imaginary Part (j\omega)');
+title('Eigenvalues (System Poles) of Linearized Models');
+legend(legend_entries, 'Location', 'best');
+ax = gca; ax.XAxisLocation = 'origin'; ax.YAxisLocation = 'origin'; ax.Box = 'on';
+axis equal; % Use equal aspect ratio
+% Optional: Adjust plot limits if needed based on results
+% xlim([-10, 1]); ylim([-10, 10]);
+hold off;
+
+
+
+%% === Task 1.9: Controllability, Observability, Stability (Hover) ===
+% Analyze the properties of the linearized HOVER model.
+
+disp('--- Task 1.9: Analysis of Linearized Hover Model ---');
+
+A = A_hover; % Use the hover A matrix
+B = B_hover; % Use the hover B matrix
+n_states = size(A, 1);
+n_inputs = size(B, 2);
+
+% --- Stability (Open-Loop) ---
+disp('Stability Analysis (Hover):');
+eigs_hover = eig(A);
+real_parts = real(eigs_hover);
+if any(real_parts > 1e-9) % Tolerance for numerical error
+    disp('  Result: UNSTABLE (Open-loop).');
+elseif any(abs(real_parts) < 1e-9)
+    disp('  Result: MARGINALLY STABLE (Open-loop).');
+    disp('    (Expected: Integrator states like position/yaw have poles at origin).');
+else
+    disp('  Result: STABLE (Open-loop).');
+end
+fprintf('  Max real part of eigenvalues: %e\n', max(real_parts));
+
+% --- Controllability ---
+disp('Controllability Analysis (Hover):');
+Co = ctrb(A, B);
+rank_Co = rank(Co, 1e-9); % Rank calculation with tolerance
+fprintf('  Rank of Controllability Matrix: %d (Full rank = %d)\n', rank_Co, n_states);
+if rank_Co == n_states
+    disp('  Result: System is CONTROLLABLE.');
+else
+    disp('  Result: System is NOT CONTROLLABLE.');
+end
+
+% --- Observability ---
+disp('Observability Analysis (Hover):');
+% Case 1: Observing all states (ideal case)
+C_full = eye(n_states); 
+Ob_full = obsv(A, C_full);
+rank_Ob_full = rank(Ob_full, 1e-9);
+fprintf('  Rank of Observability Matrix (Full State Output): %d (Full rank = %d)\n', rank_Ob_full, n_states);
+if rank_Ob_full == n_states
+    disp('  Result: System is OBSERVABLE (Full-state output).');
+else
+    disp('  Result: System is NOT OBSERVABLE (Full-state output).');
+end
+
+
+
+%% === Task 1.10: Transfer Functions (Hover) ===
+% Derive specified SISO transfer functions from the HOVER model.
+
+disp('--- Task 1.10: Deriving Transfer Functions (Hover) ---');
+
+A = A_hover; % Use hover model for these TFs
+B = B_hover;
+n_states = size(A,1); % Should be 12
+
+% Define indices for states and inputs for clarity
+idx_px = 1; idx_py = 2; idx_pz = 3;
+idx_u = 4; idx_v = 5; idx_w = 6;
+idx_phi = 7; idx_theta = 8; idx_psi = 9;
+idx_p = 10; idx_q = 11; idx_r = 12;
+idx_T = 1; idx_nx = 2; idx_ny = 3; idx_nz = 4;
+
+minreal_tol = 1e-5; % Tolerance for pole-zero cancellation in minreal
+
+% --- Inner Loop TFs ---
+fprintf('Calculating Inner Loop Transfer Functions...\n');
+
+% G_nx_phi = phi(s) / nx(s)
+C_phi = zeros(1, n_states); C_phi(idx_phi) = 1; B_nx = B(:, idx_nx); D_zero = 0;
+sys_nx_phi = ss(A, B_nx, C_phi, D_zero);
+G_nx_phi = tf(sys_nx_phi);
+G_nx_phi = minreal(G_nx_phi, minreal_tol);
+disp('G_nx_phi(s) = phi(s) / nx(s):'); zpk(G_nx_phi)
+
+% G_ny_theta = theta(s) / ny(s)
+C_theta = zeros(1, n_states); C_theta(idx_theta) = 1; B_ny = B(:, idx_ny);
+sys_ny_theta = ss(A, B_ny, C_theta, D_zero);
+G_ny_theta = tf(sys_ny_theta);
+G_ny_theta = minreal(G_ny_theta, minreal_tol);
+disp('G_ny_theta(s) = theta(s) / ny(s):'); zpk(G_ny_theta)
+
+% G_nz_psi = psi(s) / nz(s)
+C_psi = zeros(1, n_states); C_psi(idx_psi) = 1; B_nz = B(:, idx_nz);
+sys_nz_psi = ss(A, B_nz, C_psi, D_zero);
+G_nz_psi = tf(sys_nz_psi);
+G_nz_psi = minreal(G_nz_psi, minreal_tol);
+disp('G_nz_psi(s) = psi(s) / nz(s):'); zpk(G_nz_psi)
+
+% G_T_pz = pz(s) / T(s)
+C_pz = zeros(1, n_states); C_pz(idx_pz) = 1; B_T = B(:, idx_T);
+sys_T_pz = ss(A, B_T, C_pz, D_zero);
+G_T_pz = tf(sys_T_pz);
+G_T_pz = minreal(G_T_pz, minreal_tol);
+disp('G_T_pz(s) = pz(s) / T(s):'); zpk(G_T_pz)
+
+
+% --- Outer Loop TFs ---
+fprintf('\nCalculating Outer Loop Transfer Functions...\n');
+
+% G_phi_py = py(s) / phi(s)
+C_py = zeros(1, n_states); C_py(idx_py) = 1;
+sys_nx_py = ss(A, B_nx, C_py, D_zero);
+G_nx_py = tf(sys_nx_py);
+G_phi_py = minreal(G_nx_py / G_nx_phi, minreal_tol);
+disp('G_phi_py(s) = py(s) / phi(s):'); zpk(G_phi_py)
+
+% G_theta_px = px(s) / theta(s)
+C_px = zeros(1, n_states); C_px(idx_px) = 1;
+sys_ny_px = ss(A, B_ny, C_px, D_zero);
+G_ny_px = tf(sys_ny_px);
+G_theta_px = minreal(G_ny_px / G_ny_theta, minreal_tol);
+disp('G_theta_px(s) = px(s) / theta(s):'); zpk(G_theta_px)
+
+% Also calculate psi related TFs (needed for full model)
+% G_psi_px = px(s) / psi(s) = [px(s)/nz(s)] / [psi(s)/nz(s)]
+sys_nz_px = ss(A, B_nz, C_px, D_zero); G_nz_px = tf(sys_nz_px);
+G_psi_px = minreal(G_nz_px / G_nz_psi, minreal_tol);
+disp('G_psi_px(s) = px(s) / psi(s):'); zpk(G_psi_px)
+
+% G_psi_py = py(s) / psi(s) = [py(s)/nz(s)] / [psi(s)/nz(s)]
+sys_nz_py = ss(A, B_nz, C_py, D_zero); G_nz_py = tf(sys_nz_py);
+G_psi_py = minreal(G_nz_py / G_nz_psi, minreal_tol);
+disp('G_psi_py(s) = py(s) / psi(s):'); zpk(G_psi_py)
+
+disp('--- Finished Task 1.10 ---');
+
+% Store the specific TFs required for Task 1.11
+TF_T_pz_hover = G_T_pz;
+TF_phi_py_hover = G_phi_py;
+
+
+%% === Task 1.11: Closed-Loop Stability Discussion (Root Locus) ===
+% Analyze closed-loop stability for simple P-control using root locus plots
+% for the altitude and lateral position loops derived from the HOVER model.
+
+disp('--- Task 1.11: Closed-Loop Stability Discussion (Hover) ---');
+
+% --- Altitude Control Loop: G_T_pz ---
+figure('Name', 'Task 1.11: Root Locus for Altitude Loop (G_T_pz)');
+rlocusplot(TF_T_pz_hover); % Use rlocusplot for better control/info if needed
+title('Root Locus: Altitude Control (Hover, G_{T,pz}(s), P-controller)');
+grid on; sgrid; % Show damping/frequency grid
+
+disp('Discussion for Altitude Loop (G_T_pz - Hover):');
+[poles_pz, zeros_pz] = zpkdata(TF_T_pz_hover, 'v');
+fprintf('  Open Loop Poles: %s\n', mat2str(round(poles_pz, 4)));
+fprintf('  Open Loop Zeros: %s\n', mat2str(round(zeros_pz, 4)));
+
+% --- Lateral Position Control Loop: G_phi_py ---
+figure('Name', 'Task 1.11: Root Locus for Lateral Position Loop (G_phi_py)');
+rlocusplot(TF_phi_py_hover);
+title('Root Locus: Lateral Position Control (Hover, G_{\phi,py}(s), P-controller)');
+grid on; sgrid;
+
+disp('Discussion for Lateral Position Loop (G_phi_py - Hover):');
+[poles_py, zeros_py] = zpkdata(TF_phi_py_hover, 'v');
+fprintf('  Open Loop Poles: %s\n', mat2str(round(poles_py, 4)));
+fprintf('  Open Loop Zeros: %s\n', mat2str(round(zeros_py, 4)));
