@@ -1,0 +1,216 @@
+%%Dynamics
+function dx = dynamics(x, u, m, g, J, D)
+    % Extracts state and input, calculates forces/moments in body frame,
+    % and returns the state derivative dx/dt.
+    % Inputs:
+    %   x: state vector [px,py,pz, u,v,w, phi,th,psi, p,q,r]' (12x1)
+    %   u: control input vector [T, nx, ny, nz]' (4x1) - T=Total Thrust, n=Moments
+    %   m, g, J, D: physical parameters
+    % Output:
+    %   dx: state derivative vector (12x1)
+
+    % State extraction
+    v_body     = x(4:6);     % Body-frame linear velocity [u, v, w]
+    eul        = x(7:9);   % Euler angles [phi, theta, psi]
+    omega_body = x(10:12); % Body-frame angular velocity [p, q, r]
+
+    % Control inputs
+    total_thrust = u(1);      % Total thrust magnitude
+    moments_body = u(2:4);    % Net moments [Mx, My, Mz] in body frame
+
+    % Rotation matrix (Body to World)
+    R_b_w = Euler2R(eul);
+
+    % --- Forces (in Body Frame) ---
+    % Gravity in body frame
+    fg_body = R_b_w' * [0; 0; -m*g];
+    % Thrust in body frame (acts along body z-axis)
+    fp_body = [0; 0; total_thrust];
+    % Air drag in body frame (quadratic model)
+    fa_body = -D * (v_body .* abs(v_body));
+
+    % --- Translational Dynamics ---
+    % Derivative of world position (world frame) = R * v_body
+    dp_world = R_b_w * v_body;
+    % Derivative of body-frame linear velocity: dv/dt = Forces/m - omega x v
+    dv_body = (1/m) * (fp_body + fg_body + fa_body) - cross(omega_body, v_body);
+
+    % --- Rotational Dynamics ---
+    % Derivative of Euler angles
+    dEuler = euler_rates(eul, omega_body);
+    % Derivative of body-frame angular velocity: J*domega/dt = Moments - omega x (J*omega)
+    domega_body = J \ (moments_body - cross(omega_body, J*omega_body));
+
+    % Output state derivative vector
+    dx = [dp_world; dv_body; dEuler; domega_body];
+end
+
+%% linear dynamics
+
+function dx = dynamics_linear(x, u, m, g, J)
+
+    % Inputs:
+    %   x: state vector [px,py,pz, u,v,w, phi,th,psi, p,q,r]' (12x1)
+    %   u: control input vector [T, nx, ny, nz]' (4x1) - T=Total Thrust, n=Moments
+    %   m, g, J: physical parameters (D matrix is not used here)
+    % Output:
+    %   dx: state derivative vector (12x1)
+
+    % State extraction
+    v_body     = x(4:6);     % Body-frame linear velocity [u, v, w]
+    eul        = x(7:9);   % Euler angles [phi, theta, psi]
+    omega_body = x(10:12); % Body-frame angular velocity [p, q, r]
+
+    % Control inputs
+    total_thrust = u(1);      % Total thrust magnitude
+    moments_body = u(2:4);    % Net moments [Mx, My, Mz] in body frame
+
+    % Rotation matrix (Body to World)
+    R_b_w = Euler2R(eul); % Assumes Euler2R is available on the path
+
+    % --- Forces (in Body Frame) ---
+    % Gravity in body frame
+    fg_body = R_b_w' * [0; 0; -m*g];
+    % Thrust in body frame (acts along body z-axis)
+    fp_body = [0; 0; total_thrust];
+
+    % <<< KEY CHANGE: Use Linear Drag Model >>>
+    % Define representative LINEAR drag coefficients for near-hover analysis
+    % These values are ESTIMATES and affect the linear model's damping.
+    % Adjust these values based on expected behavior or data.
+    D_lin = diag([5e-2, 5e-2, 1e-1]); % Example: Higher values than original D
+    fa_body = -D_lin * v_body;         % Linear drag force
+
+    % --- Translational Dynamics ---
+    % Derivative of world position (world frame) = R * v_body
+    dp_world = R_b_w * v_body;
+    % Derivative of body-frame linear velocity: dv/dt = Forces/m - omega x v
+    dv_body = (1/m) * (fp_body + fg_body + fa_body) - cross(omega_body, v_body);
+
+    % --- Rotational Dynamics ---
+    % Derivative of Euler angles
+    dEuler = euler_rates(eul, omega_body); % Assumes euler_rates is available
+    % Derivative of body-frame angular velocity: J*domega/dt = Moments - omega x (J*omega)
+    domega_body = J \ (moments_body - cross(omega_body, J*omega_body));
+
+    % Output state derivative vector
+    dx = [dp_world; dv_body; dEuler; domega_body];
+end
+
+
+  
+%% Equilibrium conditions:
+
+function [x_eq_hover, u_eq_hover, x_eq_flight, u_eq_flight] = equilibrium_crazyflie(Vx_world, m, g, D)
+    % Calculates equilibrium state (x_eq) and input (u_eq) for
+    % hover (Vx_world=0) and steady horizontal flight (Vx_world > 0).
+    % Assumes flight primarily in world X-Z plane (no sideslip V_y=0).
+
+    % === Hover Equilibrium ===
+    x_eq_hover = zeros(12, 1);         % Zero velocities and angles (except maybe psi)
+    u_eq_hover = [m * g; 0; 0; 0];     % Thrust balances gravity, zero moments
+
+    % Check if hover is requested
+    if abs(Vx_world) < 1e-6
+        x_eq_flight = x_eq_hover; % Treat near-zero Vx as hover
+        u_eq_flight = u_eq_hover;
+        return;
+    end
+
+    % === Horizontal Flight Equilibrium ===
+    % Need to find pitch angle (theta_eq) and thrust (T_eq) such that
+    % forces balance and velocity is constant [Vx_world; 0; 0] in world frame.
+    Dx = D(1,1); Dz = D(3,3); % Assuming diagonal D
+
+    % Define function for solving equilibrium pitch angle theta_eq
+    % Force balance in body-x: mg*sin(theta) - Dx*u*|u| = 0
+    % Kinematics: u = Vx_world*cos(theta)
+    equilibrium_fun = @(theta) m*g*sin(theta) ...
+                      - Dx * (Vx_world * cos(theta)) * abs(Vx_world * cos(theta));
+
+    options = optimset('Display','off', 'TolFun', 1e-9);
+    theta_eq = 0; % Default
+    exitflag = -1; % Default
+
+    try
+        % Initial guess for theta based on simplified linear drag or small angle
+        theta_guess = asin( min(1, max(-1, Dx*Vx_world*abs(Vx_world)/(m*g))) ); % Quadratic balance guess
+        if isnan(theta_guess) || ~isreal(theta_guess), theta_guess = 0; end % Fallback guess
+        [theta_eq, ~, exitflag] = fsolve(equilibrium_fun, theta_guess, options);
+    catch ME
+        warning('Error during fsolve for equilibrium theta: %s', ME.message);
+    end
+
+    % Check if solver failed and try simpler estimate if needed
+    if exitflag <= 0
+         warning('Equilibrium theta solve failed or gave complex result (exitflag=%d). Using simplified estimate.', exitflag);
+         % Fallback: Estimate based on linear drag approx: mg*tan(theta) = Dx*Vx_world
+         theta_eq = atan2(Dx * Vx_world * abs(Vx_world), m*g); % More robust atan2 form
+         if isnan(theta_eq) || ~isreal(theta_eq), theta_eq = 0; end
+         fprintf(' Using fallback theta_eq = %.4f rad\n', theta_eq);
+    end
+
+    % Calculate corresponding equilibrium body velocities [u, v, w]
+    u_eq = Vx_world * cos(theta_eq);
+    v_eq = 0; % Assumed no sideslip
+    w_eq = Vx_world * sin(theta_eq); % From world velocity transformation
+
+    % Calculate equilibrium thrust T_eq from body-z force balance
+    % T_eq - mg*cos(theta_eq) - Dz*w*|w| = 0
+    T_eq = m*g*cos(theta_eq) + Dz * w_eq * abs(w_eq);
+
+    % Construct equilibrium state vector
+    x_eq_flight = zeros(12,1);
+    x_eq_flight(4) = u_eq;       % body u
+    x_eq_flight(5) = v_eq;       % body v
+    x_eq_flight(6) = w_eq;       % body w
+    x_eq_flight(8) = theta_eq;   % pitch theta (roll=0, yaw=0 assumed)
+
+    % Construct equilibrium input vector
+    u_eq_flight = [T_eq; 0; 0; 0]; % Thrust for balance, zero moments
+end
+
+
+
+%% Euler2R
+  function R = Euler2R(eul)
+    % Converts ZYX Euler angles (phi, theta, psi) to a rotation matrix
+    % R maps vectors from body frame to world frame (R_b_w)
+    phi = eul(1); theta = eul(2); psi = eul(3);
+
+    Rz = [cos(psi) -sin(psi) 0; sin(psi) cos(psi) 0; 0 0 1];
+    Ry = [cos(theta) 0 sin(theta); 0 1 0; -sin(theta) 0 cos(theta)];
+    Rx = [1 0 0; 0 cos(phi) -sin(phi); 0 sin(phi) cos(phi)];
+
+    R = Rz * Ry * Rx; % Rotation order Z-Y-X for body-to-world
+end
+
+
+  
+%%Euler_rates
+
+function dEuler = euler_rates(eul, omega)
+    % Calculates Euler angle rates (phi_dot, theta_dot, psi_dot)
+    % from body angular rates (p, q, r) and Euler angles (phi, theta).
+    phi = eul(1); theta = eul(2);
+
+    % Transformation matrix T (relates body rates to Euler rates)
+    % Handle potential singularity at theta = +/- 90 deg
+    cos_theta = cos(theta);
+    if abs(cos_theta) < 1e-9 % Singularity threshold
+        warning('Near singularity in Euler angle rates calculation (theta approx +/- 90 deg)');
+        % Option: Use a pseudo-inverse or limit, but results may be inaccurate near singularity.
+        % Using a small offset to avoid division by zero, but be cautious.
+        cos_theta = sign(cos_theta + 1e-15) * 1e-9; % Avoid exact zero, keep sign
+    end
+    tan_theta = sin(theta) / cos_theta;
+    T = [1, sin(phi)*tan_theta,  cos(phi)*tan_theta;
+         0, cos(phi),           -sin(phi);
+         0, sin(phi)/cos_theta,  cos(phi)/cos_theta];
+
+    dEuler = T * omega; % omega = [p; q; r]
+end
+
+
+
+
